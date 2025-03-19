@@ -1,10 +1,15 @@
 """Example of using the LLM pipeline with a Hugging Face model.
 
-Note: This example requires implementing the actual API integration in the
-HuggingFaceModel class before it will work properly.
+Before running this example:
+1. Get your Hugging Face API token from https://huggingface.co/settings/tokens
+2. Set the token in your environment as HF_API_KEY or pass it directly to HuggingFaceModel
 """
 import sys
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add the parent directory to the path so we can import the package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,8 +19,8 @@ from llm_eval.pipeline import LLMPipeline
 
 def main():
     # Create a Hugging Face model
-    # Note: You'll need to implement the actual API integration before this works
-    model = HuggingFaceModel(model_id="gpt2")
+    # Using a freely accessible model for demonstration
+    model = HuggingFaceModel(model_id="gpt2", api_key=os.environ.get("HF_API_KEY"))
     
     # Create a pipeline with the model
     pipeline = LLMPipeline(model)

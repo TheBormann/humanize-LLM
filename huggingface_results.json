@@ -1,0 +1,50 @@
+[
+  {
+    "prompt": "What is the capital of France?",
+    "response": "I believe the capital of France is France, so it is not only an English country but also a French country. And I believe it is not only an English country but also a French country. And I believe it is not only an English country but also a French country. And I believe it is not only an English country but also a French country. And I believe it is not only an English country but also a French country. And I believe it is not only an English country but",
+    "model_info": {
+      "name": "HuggingFaceModel",
+      "type": "huggingface",
+      "model_id": "gpt2",
+      "description": "Hugging Face model"
+    },
+    "time_taken": 2.6795902252197266,
+    "timestamp": 1742406835.282649
+  },
+  {
+    "prompt": "What is machine learning?",
+    "response": "Machine learning is a class of machine learning that describes the processes that a machine learns. This is a very complex topic. Machine learning is very different from machine learning because machine learning is a collection of experiments. In this class, you can take any machine that is relevant, and you can apply it to any program that can be used to learn. The idea is that you are going to use a data set of data that has been evaluated in a particular way and then you want to make a",
+    "model_info": {
+      "name": "HuggingFaceModel",
+      "type": "huggingface",
+      "model_id": "gpt2",
+      "description": "Hugging Face model"
+    },
+    "time_taken": 2.9589136441548667,
+    "timestamp": 1742406844.159442
+  },
+  {
+    "prompt": "Explain natural language processing.",
+    "response": "I'd like to put it out there that you can use the same syntax to interact with other people. What is the difference between the two?\n\nI would say that it's the difference between a message and an object, but the difference is not a difference in semantics. What is different is that it's a new concept that is being studied. The problem is that it's a new concept in the language.\n\nIt's not a new concept in the language.",
+    "model_info": {
+      "name": "HuggingFaceModel",
+      "type": "huggingface",
+      "model_id": "gpt2",
+      "description": "Hugging Face model"
+    },
+    "time_taken": 2.9589136441548667,
+    "timestamp": 1742406844.159445
+  },
+  {
+    "prompt": "How do transformers work?",
+    "response": "A transformer is a function that takes a string and returns an object. It returns the transformed string. The return value is the object of the transformation.\n\nclass Transformers < T > : public Transformers < T > { public: Transformers<T>() {} }\n\nThe transformers are taken from the above code.\n\nclass Transformers < T > : public Transformers < T > { public: Transformers<T>() {} }\n\nThe",
+    "model_info": {
+      "name": "HuggingFaceModel",
+      "type": "huggingface",
+      "model_id": "gpt2",
+      "description": "Hugging Face model"
+    },
+    "time_taken": 2.9589136441548667,
+    "timestamp": 1742406844.159446
+  }
+]
