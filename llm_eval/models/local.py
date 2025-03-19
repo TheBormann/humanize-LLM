@@ -1,12 +1,13 @@
 """Local model implementation for fine-tuning and inference."""
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Deque
 import os
 import logging
 from pathlib import Path
+from collections import deque
 import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, get_scheduler
 
 from .base import LLMModel
 
@@ -17,11 +18,12 @@ class LocalModel(LLMModel):
     """A model implementation for local models.
     
     This class provides an interface to use and fine-tune local models.
-    Note: This is a placeholder implementation that will need to be completed
-    with actual model loading and fine-tuning code.
+    It supports initial fine-tuning and online learning.
     """
     
-    def __init__(self, model_path: Union[str, Path], device: Optional[str] = None):
+    def __init__(self, model_path: Union[str, Path], device: Optional[str] = None,
+                 memory_size: int = 1000, online_batch_size: int = 1,
+                 online_learning_rate: float = 1e-5):
         """Initialize the local model.
         
         Args:
@@ -32,6 +34,11 @@ class LocalModel(LLMModel):
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = None
         self.tokenizer = None
+        self.memory_buffer: Deque[Dict[str, str]] = deque(maxlen=memory_size)
+        self.online_batch_size = online_batch_size
+        self.online_learning_rate = online_learning_rate
+        self.optimizer = None
+        self.scheduler = None
         self.load_model()
     
     def load_model(self) -> None:
@@ -39,9 +46,66 @@ class LocalModel(LLMModel):
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
             self.model = AutoModelForCausalLM.from_pretrained(self.model_path).to(self.device)
+            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.online_learning_rate)
+            self.scheduler = get_scheduler(
+                "linear",
+                optimizer=self.optimizer,
+                num_warmup_steps=0,
+                num_training_steps=1000
+            )
             logger.info(f"Successfully loaded model from {self.model_path} on {self.device}")
         except Exception as e:
             logger.error(f"Failed to load model: {str(e)}")
+            raise
+    
+    def update_memory(self, prompt: str, response: str) -> None:
+        """Update the memory buffer with new interaction.
+        
+        Args:
+            prompt: The input prompt
+            response: The model's response
+        """
+        self.memory_buffer.append({"prompt": prompt, "response": response})
+        
+        # Perform online learning if buffer has enough samples
+        if len(self.memory_buffer) >= self.online_batch_size:
+            self._online_update()
+    
+    def _online_update(self) -> None:
+        """Perform an online update step using recent interactions."""
+        try:
+            recent_data = list(self.memory_buffer)[-self.online_batch_size:]
+            dataset = self.TrainingDataset(recent_data, self.tokenizer)
+            dataloader = DataLoader(dataset, batch_size=self.online_batch_size, shuffle=True)
+            
+            self.model.train()
+            for batch in dataloader:
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                
+                outputs = self.model(input_ids=input_ids,
+                                   attention_mask=attention_mask,
+                                   labels=input_ids)
+                
+                loss = outputs.loss
+                loss.backward()
+                
+                # Clip gradients to prevent catastrophic forgetting
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                
+                self.optimizer.step()
+                self.scheduler.step()
+                self.optimizer.zero_grad()
+                
+                logger.info(f"Online update step completed. Loss: {loss.item():.4f}")
+            
+            # Save the updated model periodically
+            if len(self.memory_buffer) % 100 == 0:
+                self.model.save_pretrained(self.model_path)
+                self.tokenizer.save_pretrained(self.model_path)
+                
+        except Exception as e:
+            logger.error(f"Online update failed: {str(e)}")
             raise
     
     def generate(self, prompt: str, **kwargs) -> str:
@@ -77,7 +141,12 @@ class LocalModel(LLMModel):
                 )
             
             response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            return response[len(prompt):].strip()
+            response_text = response[len(prompt):].strip()
+            
+            # Update memory buffer with the interaction
+            self.update_memory(prompt, response_text)
+            
+            return response_text
             
         except Exception as e:
             logger.error(f"Generation failed: {str(e)}")

@@ -1,16 +1,16 @@
-"""Hugging Face model implementation."""
+"""Hugging Face local model implementation."""
 from typing import Dict, List, Optional, Union
 import os
 import logging
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 import torch
 
-from .base import LLMModel
+from .local import LocalModel
 
 logger = logging.getLogger(__name__)
 
 
-class HuggingFaceModel(LLMModel):
+class HuggingFaceModel(LocalModel):
     """A model implementation for Hugging Face API.
     
     This class provides an interface to use models from the Hugging Face Hub.
@@ -18,26 +18,45 @@ class HuggingFaceModel(LLMModel):
     with actual API integration code.
     """
     
-    def __init__(self, model_id: str, api_key: Optional[str] = None, device: Optional[str] = None):
+    def __init__(self, model_id: str, api_key: Optional[str] = None, device: Optional[str] = None,
+                 memory_size: int = 1000, online_batch_size: int = 1,
+                 online_learning_rate: float = 1e-5):
         """Initialize the Hugging Face model.
         
         Args:
             model_id: The model identifier on Hugging Face Hub
             api_key: Optional API key for accessing gated models
             device: Device to run the model on ('cuda', 'cpu', or None for auto)
+            memory_size: Size of memory buffer for online learning
+            online_batch_size: Batch size for online learning updates
+            online_learning_rate: Learning rate for online updates
         """
         self.model_id = model_id
         self.api_key = api_key or os.environ.get("HF_API_KEY")
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Set up the Hugging Face token
         if self.api_key:
             os.environ["HUGGINGFACE_TOKEN"] = self.api_key
             
+        # Download and initialize the model and tokenizer
         try:
-            # Initialize the model and tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-            self.model = AutoModelForCausalLM.from_pretrained(model_id).to(self.device)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_id, token=self.api_key)
+            self.model = AutoModelForCausalLM.from_pretrained(model_id, token=self.api_key)
+            
+            # Initialize LocalModel with downloaded model
+            super().__init__(
+                model_path=model_id,
+                device=device,
+                memory_size=memory_size,
+                online_batch_size=online_batch_size,
+                online_learning_rate=online_learning_rate
+            )
+            
+            # Move model to specified device
+            if device:
+                self.model = self.model.to(device)
+            
+            # Initialize the generator pipeline
             self.generator = pipeline(
                 'text-generation',
                 model=self.model,
@@ -45,7 +64,7 @@ class HuggingFaceModel(LLMModel):
                 device=self.device
             )
         except Exception as e:
-            logger.error(f"Failed to initialize model {model_id}: {str(e)}")
+            logger.error(f"Failed to initialize generator pipeline: {str(e)}")
             raise
     
     def generate(self, prompt: str, **kwargs) -> str:
@@ -79,9 +98,14 @@ class HuggingFaceModel(LLMModel):
                 pad_token_id=self.tokenizer.eos_token_id
             )
             
-            # Return the generated text, removing the input prompt
+            # Get the generated text
             generated_text = response[0]['generated_text']
-            return generated_text[len(prompt):].strip()
+            result = generated_text[len(prompt):].strip()
+            
+            # Update memory buffer for online learning
+            self.update_memory(prompt, result)
+            
+            return result
             
         except Exception as e:
             logger.error(f"Generation failed: {str(e)}")
@@ -118,7 +142,12 @@ class HuggingFaceModel(LLMModel):
             results = []
             for i, response in enumerate(responses):
                 generated_text = response[0]['generated_text']
-                results.append(generated_text[len(prompts[i]):].strip())
+                result = generated_text[len(prompts[i]):].strip()
+                results.append(result)
+                
+                # Update memory buffer for online learning
+                self.update_memory(prompts[i], result)
+                
             return results
             
         except Exception as e:
