@@ -737,3 +737,47 @@ def create_interface():
                             step=1,
                             label="Batch Size"
                         )
+
+        # Set up event handlers
+        primary_init_button.click(
+            fn=initialize_huggingface_model,
+            inputs=[primary_hf_model_id, primary_hf_device, primary_hf_memory_size, primary_hf_batch_size, primary_hf_learning_rate, gr.State("primary")],
+            outputs=[primary_init_output, primary_model_info_output]
+        )
+
+        secondary_init_button.click(
+            fn=initialize_huggingface_model,
+            inputs=[secondary_hf_model_id, secondary_hf_device, secondary_hf_memory_size, secondary_hf_batch_size, secondary_hf_learning_rate, gr.State("secondary")],
+            outputs=[secondary_init_output, secondary_model_info_output]
+        )
+
+        evaluator_init_button.click(
+            fn=initialize_evaluator_model,
+            inputs=[evaluator_model_id, gr.State("evaluator")],
+            outputs=[evaluator_init_output, evaluator_model_info_output]
+        )
+
+        setup_pipeline_button.click(
+            fn=setup_pipeline,
+            inputs=[pipeline_type, num_variations],
+            outputs=pipeline_setup_output
+        )
+
+        generate_button.click(
+            fn=generate_response,
+            inputs=[single_prompt, single_max_length, single_temperature, single_top_p, single_pipeline_type],
+            outputs=single_output
+        )
+
+        batch_button.click(
+            fn=batch_generate,
+            inputs=[batch_prompts, batch_max_length, batch_temperature, batch_top_p, batch_pipeline_type],
+            outputs=batch_output
+        )
+
+    return interface
+
+# Launch the interface
+if __name__ == "__main__":
+    interface = create_interface()
+    interface.launch(server_name="0.0.0.0", server_port=7860, share=True)
