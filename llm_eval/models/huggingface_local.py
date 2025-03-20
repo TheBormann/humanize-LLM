@@ -41,7 +41,19 @@ class HuggingFaceModel(LocalModel):
         # Download and initialize the model and tokenizer
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(model_id, token=self.api_key)
+            # Configure padding token properly
+            if self.tokenizer.pad_token is None:
+                # Set pad_token to eos_token
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                # Add the pad token to the tokenizer's vocabulary
+                special_tokens_dict = {'pad_token': self.tokenizer.eos_token}
+                self.tokenizer.add_special_tokens(special_tokens_dict)
+            
+            # Load the model
             self.model = AutoModelForCausalLM.from_pretrained(model_id, token=self.api_key)
+            
+            # Resize token embeddings to match the updated tokenizer
+            self.model.resize_token_embeddings(len(self.tokenizer))
             
             # Initialize LocalModel with downloaded model
             super().__init__(

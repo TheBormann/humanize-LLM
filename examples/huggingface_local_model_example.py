@@ -1,7 +1,7 @@
-"""Example of using the LLM pipeline with a local model.
+"""Example of using the LLM pipeline with a Hugging Face local model.
 
-Note: This example requires implementing the actual model loading and fine-tuning
-code in the LocalModel class before it will work properly.
+This example demonstrates using a pre-trained model from Hugging Face Hub
+with the LLM evaluation pipeline.
 """
 import sys
 import os
@@ -9,18 +9,22 @@ import os
 # Add the parent directory to the path so we can import the package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_eval.models.local import LocalModel
+from llm_eval.models.huggingface_local import HuggingFaceModel
 from llm_eval.pipeline import LLMPipeline
 
 
 def main():
-    # Create a local model
-    # Note: You'll need to implement the actual model loading code before this works
-    model_path = "examples/models/my_local_model"  # Path to your local model files
-    model = LocalModel(model_path=model_path, device="cpu")
-    
-    # Load the model
-    model.load_model()
+    # Create a Hugging Face model
+    # You can replace this with any model from Hugging Face Hub
+    model_id = "gpt2"  # Using GPT-2 as an example
+    model = HuggingFaceModel(
+        model_id=model_id,
+        device="cpu",  # Use "cuda" for GPU acceleration
+        memory_size=1000,  # Size of memory buffer for online learning
+        online_batch_size=1,  # Batch size for online updates
+        online_learning_rate=1e-5,  # Learning rate for online updates
+        model_path="examples/models/gpt2"  # Store models in examples/models directory
+    )
     
     # Create a pipeline with the model
     pipeline = LLMPipeline(model)
@@ -77,7 +81,7 @@ def main():
     print(f"Average score: {evaluation['average_score']:.2f}")
     
     # Save the results
-    results_file = "local_model_results.json"
+    results_file = "huggingface_model_results.json"
     pipeline.save_results(results_file)
     print(f"\nResults saved to {results_file}")
 

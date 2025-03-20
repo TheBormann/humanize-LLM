@@ -27,7 +27,7 @@ def main():
     
     # Create the secondary model (Local)
     # Note: You'll need to implement the actual model loading code before this works
-    model_path = "./models/my_local_model"  # Path to your local model files
+    model_path = "examples/models/my_local_model"  # Path to your local model files
     secondary_model = LocalModel(model_path=model_path, device="cpu")
     secondary_model.load_model()
     

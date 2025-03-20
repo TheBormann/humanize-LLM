@@ -179,6 +179,9 @@ class LocalModel(LLMModel):
         def __getitem__(self, idx):
             item = self.data[idx]
             combined = f"{item['prompt']}{item['response']}"
+            # Ensure padding token is properly set before tokenization
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
             encoding = self.tokenizer(combined, truncation=True, max_length=512,
                                     padding='max_length', return_tensors='pt')
             return {
