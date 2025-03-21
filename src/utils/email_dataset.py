@@ -96,3 +96,23 @@ class EmailDatasetGenerator:
         training_data = self.create_training_pairs(emails_with_key_points)
         self.save_dataset(training_data, output_file)
         return training_data
+    
+    
+class EmailDatasetManager:
+    def __init__(self, dataset_path: str):
+        self.dataset_path = dataset_path
+        self.dataset = self._load_dataset()
+        
+    def _load_dataset(self):
+        if os.path.exists(self.dataset_path):
+            with open(self.dataset_path, 'r') as f:
+                return json.load(f)
+        else:
+            return []
+        
+    def add_examples(self, new_examples: List[Dict[str, str]]):
+        self.dataset.extend(new_examples)
+        
+    def save_dataset(self):
+        with open(self.dataset_path, 'w') as f:
+            json.dump(self.dataset, f, indent=4)
