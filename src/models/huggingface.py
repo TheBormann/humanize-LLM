@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Union
 import os
 import logging
 from huggingface_hub import InferenceClient
-from .base import LLMModel
+from .base import LLMModel, FinetuningArguments
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +109,27 @@ class HuggingFaceModel(LLMModel):
             "description": "Hugging Face model"
         })
         return info
+
+    def load_model(self, model_path: str, **kwargs) -> None:
+        """Not supported for API-based models."""
+        raise NotImplementedError(
+            "HuggingFaceModel uses remote inference and does not support loading local models."
+        )
+    
+    def finetune(self, training_args: FinetuningArguments, **kwargs) -> Dict:
+        """Not supported for API-based models."""
+        raise NotImplementedError(
+            "HuggingFaceModel uses remote inference and does not support fine-tuning."
+        )
+    
+    def save_checkpoint(self, path: str) -> None:
+        """Not supported for API-based models."""
+        raise NotImplementedError(
+            "HuggingFaceModel uses remote inference and does not support saving checkpoints."
+        )
+    
+    def load_checkpoint(self, path: str) -> None:
+        """Not supported for API-based models."""
+        raise NotImplementedError(
+            "HuggingFaceModel uses remote inference and does not support loading checkpoints."
+        )

@@ -8,8 +8,8 @@ import os
 # Add the parent directory to the path so we can import the package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_eval.utils.model_utils import get_local_model
-from llm_eval.models.base import FinetuningArguments
+from src.utils.model_utils import get_local_model
+from src.models.base import FinetuningArguments
 
 # Configure logging
 logging.basicConfig(

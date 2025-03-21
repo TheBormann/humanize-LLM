@@ -1,17 +1,26 @@
-"""Simple example of using the LLM pipeline with a mock model."""
+"""Example of using the LLM pipeline with a Hugging Face model.
+
+Before running this example:
+1. Get your Hugging Face API token from https://huggingface.co/settings/tokens
+2. Set the token in your environment as HF_API_KEY or pass it directly to HuggingFaceModel
+"""
 import sys
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add the parent directory to the path so we can import the package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_eval.models.mock import MockModel
-from llm_eval.pipeline import LLMPipeline
-
+from src.models.huggingface import HuggingFaceModel
+from src.pipeline import LLMPipeline
 
 def main():
-    # Create a mock model for testing
-    model = MockModel(prefix="Test response: ")
+    # Create a Hugging Face model
+    # Using a freely accessible model for demonstration
+    model = HuggingFaceModel(model_id="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", api_key=os.environ.get("HF_API_KEY"))
     
     # Create a pipeline with the model
     pipeline = LLMPipeline(model)
@@ -36,19 +45,8 @@ def main():
         print(f"\nPrompt: {prompt}")
         print(f"Response: {response}")
     
-    # Define a simple evaluator function
-    def simple_evaluator(prompt, response):
-        # This is just a dummy evaluator that scores based on response length
-        # In a real scenario, you would implement a more meaningful evaluation
-        return min(len(response) / 100, 1.0)
-    
-    # Evaluate the responses
-    print("\nEvaluating responses...")
-    evaluation = pipeline.evaluate(prompts, simple_evaluator)
-    print(f"Average score: {evaluation['average_score']:.2f}")
-    
     # Save the results
-    results_file = "mock_results.json"
+    results_file = "huggingface_results.json"
     pipeline.save_results(results_file)
     print(f"\nResults saved to {results_file}")
 
