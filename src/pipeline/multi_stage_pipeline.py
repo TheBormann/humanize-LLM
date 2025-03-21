@@ -3,10 +3,10 @@ from typing import Dict, List, Optional, Union, Any, Callable
 import json
 import time
 
-from .models.base import LLMModel
-from .models.huggingface import HuggingFaceModel
-from .models.local import LocalModel
-from .models.evaluator import EvaluatorModel
+from ..models.base import LLMModel
+from ..models.huggingface import HuggingFaceModel
+from ..models.local import LocalModel
+from ..models.evaluator import EvaluatorModel
 from .pipeline import LLMPipeline
 
 

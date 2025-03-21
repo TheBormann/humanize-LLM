@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Union, Any, Callable
 import json
 import time
 
-from .models.base import LLMModel
+from ..models.base import LLMModel
 
 
 class LLMPipeline:
