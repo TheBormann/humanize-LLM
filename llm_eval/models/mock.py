@@ -43,6 +43,23 @@ class MockModel(LLMModel):
         """
         return [self.generate(prompt) for prompt in prompts]
     
+    def load_model(self, model_path: str, **kwargs) -> None:
+        """Mock implementation of loading a model."""
+        print(f"Mock: Would load model from {model_path}")
+        
+    def finetune(self, training_args: FinetuningArguments, **kwargs) -> Dict:
+        """Mock implementation of finetuning."""
+        print(f"Mock: Would finetune with {training_args}")
+        return {"status": "success", "loss": 0.01}
+        
+    def save_checkpoint(self, path: str) -> None:
+        """Mock implementation of saving a checkpoint."""
+        print(f"Mock: Would save checkpoint to {path}")
+        
+    def load_checkpoint(self, path: str) -> None:
+        """Mock implementation of loading a checkpoint."""
+        print(f"Mock: Would load checkpoint from {path}")
+    
     def get_model_info(self) -> Dict[str, str]:
         """Get information about the mock model.
         
