@@ -1,15 +1,26 @@
 """Local model implementation for fine-tuning and inference."""
-from typing import Dict, List, Optional, Union, Any, Deque
-import os
 import logging
-from pathlib import Path
-from collections import deque
-import torch
-from torch import nn
-from torch.utils.data import Dataset, DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, get_scheduler
+import os
+from typing import Dict, List, Optional, Union
 
-from .base import LLMModel
+import torch
+from torch.utils.data import Dataset, DataLoader
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    Trainer,
+    TrainingArguments
+)
+from datasets import Dataset as HFDataset
+from peft import (
+    LoraConfig, 
+    get_peft_model, 
+    prepare_model_for_kbit_training,
+    TaskType
+)
+
+from .base import LLMModel, FinetuningArguments, PEFTArguments
 
 logger = logging.getLogger(__name__)
 
@@ -18,253 +29,320 @@ class LocalModel(LLMModel):
     """A model implementation for local models.
     
     This class provides an interface to use and fine-tune local models.
-    It supports initial fine-tuning and online learning.
     """
     
-    def __init__(self, model_path: Union[str, Path], device: Optional[str] = None,
-                 memory_size: int = 1000, online_batch_size: int = 1,
-                 online_learning_rate: float = 1e-5):
-        """Initialize the local model.
-        
-        Args:
-            model_path: Path to the local model files
-            device: Device to run the model on ('cuda', 'cpu', or None for auto)
-        """
-        self.model_path = Path(model_path)
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+    def __init__(self, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
+        super().__init__(device=device)
         self.model = None
         self.tokenizer = None
-        self.memory_buffer: Deque[Dict[str, str]] = deque(maxlen=memory_size)
-        self.online_batch_size = online_batch_size
-        self.online_learning_rate = online_learning_rate
-        self.optimizer = None
-        self.scheduler = None
-        self.load_model()
-    
-    def load_model(self) -> None:
-        """Load the model from the specified path."""
+        self.is_peft_model = False
+        
+    def load_model(self, model_path: str, **kwargs) -> None:
+        """Load the model from a given path.
+        
+        Args:
+            model_path: Path to the model or model identifier
+            **kwargs: Additional arguments for model loading
+                quantize: Whether to use quantization (4bit or 8bit)
+                quantize_type: Type of quantization ('4bit' or '8bit')
+                lora_path: Optional path to LoRA weights
+        """
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
-            self.model = AutoModelForCausalLM.from_pretrained(self.model_path).to(self.device)
-            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.online_learning_rate)
-            self.scheduler = get_scheduler(
-                "linear",
-                optimizer=self.optimizer,
-                num_warmup_steps=0,
-                num_training_steps=1000
+            # Configure quantization if requested
+            model_kwargs = {}
+            quantize = kwargs.get('quantize', False)
+            quantize_type = kwargs.get('quantize_type', '4bit')
+            
+            if quantize:
+                logger.info(f"Loading model with {quantize_type} quantization")
+                if quantize_type == '4bit':
+                    model_kwargs['quantization_config'] = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_use_double_quant=True
+                    )
+                elif quantize_type == '8bit':
+                    model_kwargs['load_in_8bit'] = True
+                else:
+                    logger.warning(f"Unknown quantization type: {quantize_type}, using default")
+            
+            # Load tokenizer first (doesn't depend on quantization)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+            
+            # Handle tokenizer configuration
+            if not self.tokenizer.pad_token:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                
+            # Load the model with configured options
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_path, 
+                device_map=self.device if self.device != 'cpu' else None,
+                **model_kwargs
             )
-            logger.info(f"Successfully loaded model from {self.model_path} on {self.device}")
+            
+            # Load LoRA weights if provided
+            lora_path = kwargs.get('lora_path', None)
+            if lora_path and os.path.exists(lora_path):
+                logger.info(f"Loading LoRA weights from {lora_path}")
+                from peft import PeftModel
+                self.model = PeftModel.from_pretrained(self.model, lora_path)
+                self.is_peft_model = True
+                
+            self.model_path = model_path
+            logger.info(f"Successfully loaded model from {model_path} on {self.device}")
+                
         except Exception as e:
             logger.error(f"Failed to load model: {str(e)}")
             raise
     
-    def update_memory(self, prompt: str, response: str) -> None:
-        """Update the memory buffer with new interaction.
-        
-        Args:
-            prompt: The input prompt
-            response: The model's response
-        """
-        self.memory_buffer.append({"prompt": prompt, "response": response})
-        
-        # Perform online learning if buffer has enough samples
-        if len(self.memory_buffer) >= self.online_batch_size:
-            self._online_update()
-    
-    def _online_update(self) -> None:
-        """Perform an online update step using recent interactions."""
-        try:
-            recent_data = list(self.memory_buffer)[-self.online_batch_size:]
-            dataset = self.TrainingDataset(recent_data, self.tokenizer)
-            dataloader = DataLoader(dataset, batch_size=self.online_batch_size, shuffle=True)
-            
-            self.model.train()
-            for batch in dataloader:
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                
-                outputs = self.model(input_ids=input_ids,
-                                   attention_mask=attention_mask,
-                                   labels=input_ids)
-                
-                loss = outputs.loss
-                loss.backward()
-                
-                # Clip gradients to prevent catastrophic forgetting
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                
-                self.optimizer.step()
-                self.scheduler.step()
-                self.optimizer.zero_grad()
-                
-                logger.info(f"Online update step completed. Loss: {loss.item():.4f}")
-            
-            # Save the updated model periodically
-            if len(self.memory_buffer) % 100 == 0:
-                self.model.save_pretrained(self.model_path)
-                self.tokenizer.save_pretrained(self.model_path)
-                
-        except Exception as e:
-            logger.error(f"Online update failed: {str(e)}")
-            raise
-    
     def generate(self, prompt: str, **kwargs) -> str:
-        """Generate a response using the local model.
-        
-        Args:
-            prompt: The input text
-            **kwargs: Additional parameters to pass to the model
-                max_length: Maximum length of generated text
-                temperature: Sampling temperature
-                top_p: Nucleus sampling parameter
-            
-        Returns:
-            The generated text response
-        """
+        """Generate text response from prompt."""
+        if not self.model or not self.tokenizer:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        # Extract generation parameters with defaults
+        max_new_tokens = kwargs.get('max_new_tokens', 100)
+        temperature = kwargs.get('temperature', 0.7)
+        top_p = kwargs.get('top_p', 0.9)
+        repetition_penalty = kwargs.get('repetition_penalty', 1.0)
+
         try:
-            if not self.model or not self.tokenizer:
-                raise RuntimeError("Model not loaded. Call load_model() first.")
-
-            max_length = kwargs.get('max_length', 100)
-            temperature = kwargs.get('temperature', 0.7)
-            top_p = kwargs.get('top_p', 0.9)
-
             inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
             
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
-                    max_length=max_length,
+                    max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
+                    repetition_penalty=repetition_penalty,
                     pad_token_id=self.tokenizer.eos_token_id
                 )
             
             response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            response_text = response[len(prompt):].strip()
-            
-            # Update memory buffer with the interaction
-            self.update_memory(prompt, response_text)
-            
-            return response_text
-            
+            # Remove the prompt from the response
+            return response[len(self.tokenizer.decode(inputs.input_ids[0], skip_special_tokens=True)):].strip()
         except Exception as e:
-            logger.error(f"Generation failed: {str(e)}")
-            raise
-    
+            logger.error(f"Error during generation: {str(e)}")
+            return f"Error: {str(e)}"
+            
     def batch_generate(self, prompts: List[str], **kwargs) -> List[str]:
-        """Generate responses for multiple prompts.
-        
-        Args:
-            prompts: List of input prompts
-            **kwargs: Additional parameters to pass to the model
+        """Generate responses for multiple prompts efficiently."""
+        if not self.model or not self.tokenizer:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
             
-        Returns:
-            List of generated text responses
-        """
-        try:
-            return [self.generate(prompt, **kwargs) for prompt in prompts]
-        except Exception as e:
-            logger.error(f"Batch generation failed: {str(e)}")
-            raise
-
-    class TrainingDataset(Dataset):
-        def __init__(self, data: List[Dict[str, str]], tokenizer):
-            self.data = data
-            self.tokenizer = tokenizer
-
-        def __len__(self):
-            return len(self.data)
-
-        def __getitem__(self, idx):
-            item = self.data[idx]
-            combined = f"{item['prompt']}{item['response']}"
-            # Ensure padding token is properly set before tokenization
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-            encoding = self.tokenizer(combined, truncation=True, max_length=512,
-                                    padding='max_length', return_tensors='pt')
-            return {
-                'input_ids': encoding['input_ids'].squeeze(),
-                'attention_mask': encoding['attention_mask'].squeeze()
-            }
-    
-    def fine_tune(self, train_data: List[Dict[str, str]], **kwargs) -> Any:
-        """Fine-tune the model on the provided training data.
-        
-        Args:
-            train_data: List of training examples, each containing 'prompt' and 'response'
-            **kwargs: Additional fine-tuning parameters
-                epochs: Number of training epochs
-                batch_size: Training batch size
-                learning_rate: Learning rate for optimization
+        if not prompts:
+            return []
             
-        Returns:
-            Training results or metrics
-        """
-        try:
-            if not self.model or not self.tokenizer:
-                raise RuntimeError("Model not loaded. Call load_model() first.")
-
-            epochs = kwargs.get('epochs', 3)
-            batch_size = kwargs.get('batch_size', 4)
-            learning_rate = kwargs.get('learning_rate', 2e-5)
-
-            # Prepare dataset and dataloader
-            dataset = self.TrainingDataset(train_data, self.tokenizer)
-            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-            # Setup training
-            optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
-            self.model.train()
-
-            total_loss = 0
-            for epoch in range(epochs):
-                epoch_loss = 0
-                for batch in dataloader:
-                    input_ids = batch['input_ids'].to(self.device)
-                    attention_mask = batch['attention_mask'].to(self.device)
-
-                    outputs = self.model(input_ids=input_ids,
-                                       attention_mask=attention_mask,
-                                       labels=input_ids)
+        # Extract generation parameters with defaults
+        max_new_tokens = kwargs.get('max_new_tokens', 100)
+        temperature = kwargs.get('temperature', 0.7)
+        top_p = kwargs.get('top_p', 0.9)
+        repetition_penalty = kwargs.get('repetition_penalty', 1.0)
+        batch_size = kwargs.get('batch_size', 1)
+        
+        all_responses = []
+        
+        # Process prompts in batches
+        for i in range(0, len(prompts), batch_size):
+            batch_prompts = prompts[i:i+batch_size]
+            try:
+                # Tokenize all prompts in this batch
+                inputs = self.tokenizer(batch_prompts, padding=True, return_tensors="pt").to(self.device)
+                
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        **inputs,
+                        max_new_tokens=max_new_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        repetition_penalty=repetition_penalty,
+                        pad_token_id=self.tokenizer.eos_token_id
+                    )
+                
+                # Decode outputs and remove prompts
+                decoded_outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                decoded_inputs = self.tokenizer.batch_decode(inputs.input_ids, skip_special_tokens=True)
+                
+                # Remove prompt from each response
+                for j, (output, input_text) in enumerate(zip(decoded_outputs, decoded_inputs)):
+                    all_responses.append(output[len(input_text):].strip())
                     
-                    loss = outputs.loss
-                    loss.backward()
-                    optimizer.step()
-                    optimizer.zero_grad()
+            except Exception as e:
+                logger.error(f"Error during batch generation: {str(e)}")
+                # Add error responses for this batch
+                all_responses.extend([f"Error: {str(e)}"] * len(batch_prompts))
+                
+        return all_responses
 
-                    epoch_loss += loss.item()
-
-                avg_epoch_loss = epoch_loss / len(dataloader)
-                total_loss += avg_epoch_loss
-                logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
-
-            # Save the fine-tuned model
-            self.model.save_pretrained(self.model_path)
-            self.tokenizer.save_pretrained(self.model_path)
-
+    def finetune(self, training_args: FinetuningArguments, **kwargs) -> Dict:
+        """Finetune the model with provided training data.
+        
+        Args:
+            training_args: Arguments for fine-tuning
+            **kwargs: Additional arguments:
+                output_dir: Directory to save outputs
+                peft_args: PEFT configuration arguments
+                eval_data: Optional evaluation dataset
+        """
+        if not self.model or not self.tokenizer:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+        
+        train_data = training_args.train_data
+        if not train_data:
+            raise ValueError("Training data must be provided")
+            
+        # Convert to HuggingFace dataset format
+        formatted_data = {
+            'prompt': [item['prompt'] for item in train_data],
+            'response': [item['response'] for item in train_data]
+        }
+        dataset = HFDataset.from_dict(formatted_data)
+        
+        # Check for PEFT arguments
+        peft_args = kwargs.get('peft_args', None)
+        output_dir = kwargs.get('output_dir', './output')
+        
+        # Apply PEFT if requested
+        if peft_args and isinstance(peft_args, PEFTArguments):
+            logger.info(f"Using PEFT method: {peft_args.method}")
+            
+            if peft_args.method.lower() in ['lora', 'qlora']:
+                # Prepare model for kbit training if using quantization
+                if getattr(self.model, 'is_loaded_in_8bit', False) or getattr(self.model, 'is_loaded_in_4bit', False):
+                    self.model = prepare_model_for_kbit_training(self.model)
+                
+                # Configure LoRA
+                lora_config = LoraConfig(
+                    r=peft_args.rank,
+                    lora_alpha=peft_args.alpha,
+                    lora_dropout=peft_args.dropout,
+                    bias="none",
+                    task_type=TaskType.CAUSAL_LM,
+                    target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+                )
+                
+                # Apply LoRA adapter
+                self.model = get_peft_model(self.model, lora_config)
+                self.is_peft_model = True
+                
+                # Log trainable parameters
+                trainable_params = 0
+                all_params = 0
+                for _, param in self.model.named_parameters():
+                    all_params += param.numel()
+                    if param.requires_grad:
+                        trainable_params += param.numel()
+                logger.info(f"Trainable params: {trainable_params:,d} ({100 * trainable_params / all_params:.2f}%)")
+        
+        # Create a simple training dataset
+        def tokenize_function(examples):
+            # Combine prompt and response
+            texts = [p + r for p, r in zip(examples['prompt'], examples['response'])]
+            return self.tokenizer(
+                texts, 
+                padding="max_length",
+                truncation=True,
+                max_length=512,
+                return_tensors="pt"
+            )
+        
+        tokenized_dataset = dataset.map(
+            tokenize_function,
+            batched=True,
+            remove_columns=['prompt', 'response']
+        )
+        
+        # Configure training arguments
+        args = TrainingArguments(
+            output_dir=output_dir,
+            num_train_epochs=training_args.epochs,
+            per_device_train_batch_size=training_args.batch_size,
+            learning_rate=training_args.learning_rate,
+            weight_decay=0.01,
+            logging_dir=os.path.join(output_dir, 'logs'),
+            logging_steps=10,
+            save_strategy="epoch"
+        )
+        
+        # Initialize trainer and train
+        trainer = Trainer(
+            model=self.model,
+            args=args,
+            train_dataset=tokenized_dataset
+        )
+        
+        try:
+            train_result = trainer.train()
+            
+            # Save the model
+            if self.is_peft_model:
+                self.model.save_pretrained(output_dir)
+            else:
+                self.model.save_pretrained(output_dir)
+                self.tokenizer.save_pretrained(output_dir)
+            
             return {
                 "status": "success",
-                "average_loss": total_loss / epochs,
-                "epochs_completed": epochs
+                "loss": train_result.training_loss,
+                "epochs": training_args.epochs
             }
-
         except Exception as e:
-            logger.error(f"Fine-tuning failed: {str(e)}")
+            logger.error(f"Error during fine-tuning: {str(e)}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+        
+    def save_checkpoint(self, path: str) -> None:
+        """Save model checkpoint."""
+        if not self.model or not self.tokenizer:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+            
+        try:
+            os.makedirs(path, exist_ok=True)
+            
+            if self.is_peft_model:
+                self.model.save_pretrained(path)
+                logger.info(f"PEFT model adapter saved to {path}")
+            else:
+                self.model.save_pretrained(path)
+                self.tokenizer.save_pretrained(path)
+                logger.info(f"Model checkpoint saved to {path}")
+        except Exception as e:
+            logger.error(f"Error saving checkpoint: {str(e)}")
+            raise
+
+    def load_checkpoint(self, path: str) -> None:
+        """Load model from checkpoint."""
+        try:
+            # Check if this is a PEFT checkpoint
+            if os.path.exists(os.path.join(path, "adapter_config.json")):
+                if not self.model:
+                    raise RuntimeError("Base model must be loaded before loading a PEFT adapter")
+                    
+                from peft import PeftModel
+                self.model = PeftModel.from_pretrained(self.model, path)
+                self.is_peft_model = True
+                logger.info(f"PEFT adapter loaded from checkpoint at {path}")
+            else:
+                # Load as regular model
+                self.load_model(path)
+                logger.info(f"Model loaded from checkpoint at {path}")
+        except Exception as e:
+            logger.error(f"Error loading checkpoint: {str(e)}")
             raise
     
     def get_model_info(self) -> Dict[str, str]:
-        """Get information about the local model.
-        
-        Returns:
-            Dictionary with model information
-        """
+        """Get information about the local model."""
         info = super().get_model_info()
         info.update({
             "type": "local",
-            "model_path": str(self.model_path),
             "device": self.device,
-            "description": "Local fine-tunable model"
+            "description": "Local fine-tunable model",
+            "is_peft_model": str(self.is_peft_model)
         })
+        if hasattr(self, 'model_path'):
+            info["model_path"] = str(self.model_path)
         return info

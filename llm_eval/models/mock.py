@@ -1,7 +1,8 @@
 """Mock model implementation for testing."""
 from typing import Dict, List, Optional
 
-from .base import LLMModel
+from .base import LLMModel, FinetuningArguments
+
 
 
 class MockModel(LLMModel):
