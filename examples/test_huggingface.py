@@ -15,7 +15,7 @@ load_dotenv()
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.models.huggingface import HuggingFaceModel
-from src.pipeline import LLMPipeline
+from src.pipeline.pipeline import LLMPipeline
 
 def main():
     # Create a Hugging Face model
