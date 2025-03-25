@@ -3,14 +3,29 @@ import sys
 import pandas as pd
 import gradio as gr
 from pathlib import Path
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
 
 # Add the parent directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import the HuggingFaceModel
+from src.models.huggingface import HuggingFaceModel
 
 # Configure paths
 DATA_DIR = "data"
 DEFAULT_INPUT_CSV = os.path.join(DATA_DIR, "manual_emails_template.csv")
 OUTPUT_CSV = os.path.join(DATA_DIR, "manual_emails.csv")
+
+# Default HuggingFace model
+DEFAULT_HF_MODEL = "mistralai/mistral-7b-instruct-v0.2"
 
 # Global variables
 email_df = None
@@ -18,6 +33,7 @@ current_index = 0
 total_emails = 0
 current_csv_path = DEFAULT_INPUT_CSV
 uploaded_file_path = None
+hf_model = None
 
 # Load the CSV file
 def load_csv(csv_path=None):
@@ -109,16 +125,30 @@ def get_current_email():
 def create_new_file():
     global email_df, current_csv_path, uploaded_file_path, current_index, total_emails
     try:
-        # Create a new DataFrame with the required columns
-        email_df = pd.DataFrame(columns=['subject', 'body', 'body_ai', 'date'])
+        # Get current date in YYYY-MM-DD format
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        # Create a new DataFrame with the required columns and one initial row
+        email_df = pd.DataFrame([
+            {
+                'subject': 'New Email Subject',
+                'body': 'Enter your email body here...',
+                'body_ai': 'Enter your email body here...',
+                'date': today
+            }
+        ])
         
         # Set the current path to the default output path
         current_csv_path = OUTPUT_CSV
         uploaded_file_path = None
         current_index = 0
-        total_emails = 0
+        total_emails = 1  # We now have one email
         
-        return "Created new empty email template file", email_df.to_dict('records')
+        # Get the new email data for UI update
+        subject, body_ai, body, _, nav_info = get_current_email()
+        
+        return "Created new email template file with initial row", email_df.to_dict('records')
     except Exception as e:
         return f"Error creating new file: {str(e)}", []
 
@@ -157,6 +187,55 @@ def add_new_row():
     except Exception as e:
         return f"Error adding new row: {str(e)}", "", "", "", "", "No emails loaded"
 
+# Generate AI email body based on subject
+def generate_ai_email():
+    global email_df, current_index, hf_model
+    
+    try:
+        if email_df is None or current_index < 0 or current_index >= len(email_df):
+            return "No email selected", ""
+        
+        # Get the current subject
+        subject = email_df.iloc[current_index]['subject']
+        
+        # Check if we have a subject
+        if not subject or subject.strip() == "":
+            return "Subject is empty. Please provide a subject first.", ""
+        
+        # Initialize the model if not already done
+        if hf_model is None:
+            api_key = os.environ.get("HF_API_KEY")
+            if not api_key:
+                return "HF_API_KEY environment variable not set. Please set it to use this feature.", ""
+            
+            try:
+                hf_model = HuggingFaceModel(model_id=DEFAULT_HF_MODEL, api_key=api_key)
+                logger.info(f"Initialized HuggingFace model: {DEFAULT_HF_MODEL}")
+            except Exception as e:
+                error_msg = f"Failed to initialize HuggingFace model: {str(e)}"
+                logger.error(error_msg)
+                return error_msg, ""
+        
+        # Create a prompt for the model
+        prompt = f"Write a professional email with the subject: '{subject}'. The email should be concise, clear, and maintain a professional tone."
+        
+        # Generate the email body
+        try:
+            generated_text = hf_model.generate(prompt, max_length=300, temperature=0.7)
+            
+            # Update the email_df with the generated text
+            email_df.at[current_index, 'body_ai'] = generated_text.replace('\n', '\\n')
+            
+            return f"Generated AI email body for subject: {subject}", generated_text
+        except Exception as e:
+            error_msg = f"Error generating email: {str(e)}"
+            logger.error(error_msg)
+            return error_msg, ""
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        logger.error(error_msg)
+        return error_msg, ""
+
 # Define the Gradio interface
 with gr.Blocks(title="Email Dataset Editor") as app:
     gr.Markdown("# Email Dataset Editor")
@@ -185,18 +264,24 @@ with gr.Blocks(title="Email Dataset Editor") as app:
     # Email content
     subject = gr.Textbox(label="Subject", interactive=True)
     
-    # Rich text editor for the body
-    body_ai = gr.TextArea(label="Your Email Body", interactive=True, lines=10)
-    
     # Display for original body
-    original_body = gr.TextArea(label="AI Email Body", interactive=False, lines=10)
+    original_body = gr.TextArea(label="Your Email Body", interactive=True, lines=10)
+    
+    # Rich text editor for the body
+    body_ai = gr.TextArea(label="AI Email Body", interactive=True, lines=10)
     
     # Data display (hidden, just for debugging)
     data_display = gr.JSON(visible=False)
     
+    # Generate AI email button
+    generate_btn = gr.Button("Generate AI Email")
+    
     # Connect the components
-    create_btn.click(create_new_file, outputs=[status, data_display])
-    create_btn.click(get_current_email, outputs=[subject, body_ai, original_body, original_body, nav_info])
+    # Use a single callback for create_btn to ensure UI is properly updated
+    create_btn.click(
+        lambda: (create_new_file()[0], create_new_file()[1], *get_current_email()),
+        outputs=[status, data_display, subject, body_ai, original_body, original_body, nav_info]
+    )
     
     file_upload.upload(handle_file_upload, inputs=[file_upload], 
                       outputs=[status, data_display, subject, body_ai, original_body, original_body, nav_info])
@@ -208,6 +293,7 @@ with gr.Blocks(title="Email Dataset Editor") as app:
     add_btn.click(add_new_row, outputs=[status, subject, body_ai, original_body, original_body, nav_info])
     
     body_ai.change(update_email, inputs=[body_ai], outputs=[status])
+    generate_btn.click(generate_ai_email, outputs=[status, body_ai])
 
 # Launch the app
 if __name__ == "__main__":
