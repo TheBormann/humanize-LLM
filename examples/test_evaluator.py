@@ -14,7 +14,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Removed mock model import as it doesn't work with the eval model
 from src.models.evaluator import EvaluatorModel
 from src.models.huggingface import HuggingFaceModel
-from src.models.huggingface_local import HuggingFaceModel as HuggingFaceLocalModel
 
 
 def main():
