@@ -229,67 +229,75 @@ def start_finetuning(model_id, output_name, epochs, batch_size, learning_rate, u
     except Exception as e:
         return f"Error starting fine-tuning job: {str(e)}"
 
-def setup_pipeline(pipeline_type, model_id, api_key, local_model_path=None, use_lora=False, lora_path=None):
-    """Set up a pipeline with the specified model."""
+def setup_pipeline(pipeline_type, primary_model_id, api_key, style_model_path=None, evaluator_model_id=None, 
+use_lora=False, lora_path=None):
+    """Set up a pipeline with the specified models."""
     global hf_model, local_model, evaluator_model, pipeline
     
     try:
-        # Initialize models if needed
-        if hf_model is None or hf_model.model_id != model_id:
-            hf_model = HuggingFaceModel(model_id=model_id, api_key=api_key)
+        # Initialize primary model
+        primary_hf_model = HuggingFaceModel(model_id=primary_model_id, api_key=api_key)
         
         # Initialize pipeline based on type
         if pipeline_type == "Basic Pipeline":
-            pipeline = LLMPipeline(model=hf_model)
-            return f"Initialized basic pipeline with model: {model_id}"
+            pipeline = LLMPipeline(model=primary_hf_model)
+            return f"Initialized basic pipeline with model: {primary_model_id}"
             
         elif pipeline_type == "Multi-Stage Pipeline":
-            # Initialize local model if provided
-            if not local_model_path:
-                return "Local model path is required for Multi-Stage Pipeline"
+            # Initialize style model if provided
+            if not style_model_path:
+                return "Style model path is required for Multi-Stage Pipeline"
                 
-            local_model = LocalModel()
-            local_model.load_model(
-                model_path=local_model_path,
+            style_model = LocalModel()
+            style_model.load_model(
+                model_path=style_model_path,
                 quantize=True,
                 quantize_type="4bit",
                 lora_path=lora_path if use_lora else None
             )
             
             # Initialize evaluator model
-            evaluator_model = EvaluatorModel(evaluation_model=hf_model)
+            if evaluator_model_id and evaluator_model_id != primary_model_id:
+                eval_hf_model = HuggingFaceModel(model_id=evaluator_model_id, api_key=api_key)
+                evaluator_model = EvaluatorModel(evaluation_model=eval_hf_model)
+            else:
+                evaluator_model = EvaluatorModel(evaluation_model=primary_hf_model)
             
             # Create pipeline
             pipeline = MultiStagePipeline(
-                primary_model=hf_model,
-                secondary_model=local_model,
+                primary_model=primary_hf_model,
+                secondary_model=style_model,
                 evaluator_model=evaluator_model
             )
-            return f"Initialized Multi-Stage Pipeline with models: {model_id} and {local_model_path}"
+            return f"Initialized Multi-Stage Pipeline with models:\nPrimary: {primary_model_id}\nStyle: {style_model_path}\nEvaluator: {evaluator_model_id or primary_model_id}"
             
         elif pipeline_type == "Personalized Pipeline":
-            # Initialize local model if provided
-            if not local_model_path:
-                return "Local model path is required for Personalized Pipeline"
+            # Initialize style model if provided
+            if not style_model_path:
+                return "Style model path is required for Personalized Pipeline"
                 
-            local_model = LocalModel()
-            local_model.load_model(
-                model_path=local_model_path,
+            style_model = LocalModel()
+            style_model.load_model(
+                model_path=style_model_path,
                 quantize=True,
                 quantize_type="4bit",
                 lora_path=lora_path if use_lora else None
             )
             
             # Initialize evaluator model
-            evaluator_model = EvaluatorModel(evaluation_model=hf_model)
+            if evaluator_model_id and evaluator_model_id != primary_model_id:
+                eval_hf_model = HuggingFaceModel(model_id=evaluator_model_id, api_key=api_key)
+                evaluator_model = EvaluatorModel(evaluation_model=eval_hf_model)
+            else:
+                evaluator_model = EvaluatorModel(evaluation_model=primary_hf_model)
             
             # Create pipeline
             pipeline = PersonalizedPipeline(
-                initial_model=hf_model,
-                style_model=local_model,
+                initial_model=primary_hf_model,
+                style_model=style_model,
                 evaluator_model=evaluator_model
             )
-            return f"Initialized Personalized Pipeline with models: {model_id} and {local_model_path}"
+            return f"Initialized Personalized Pipeline with models:\nPrimary: {primary_model_id}\nStyle: {style_model_path}\nEvaluator: {evaluator_model_id or primary_model_id}"
         else:
             return f"Unknown pipeline type: {pipeline_type}"
     except Exception as e:
@@ -435,7 +443,9 @@ def build_interface():
                         value="Basic Pipeline"
                     )
                     
-                    pipeline_model_id = gr.Textbox(
+                    # Primary model configuration
+                    gr.Markdown("#### Primary Model (Complex Tasks)")
+                    primary_model_id = gr.Textbox(
                         label="Primary Model ID", 
                         value=DEFAULT_HF_MODELS[0] if DEFAULT_HF_MODELS else ""
                     )
@@ -446,16 +456,34 @@ def build_interface():
                         type="password"
                     )
                     
+                    # Advanced options for multi-stage and personalized pipelines
                     with gr.Row(visible=False) as advanced_pipeline_options:
-                        local_model_path = gr.Textbox(
-                            label="Local Model Path", 
-                            placeholder="Path to local model"
-                        )
-                        use_lora_checkbox = gr.Checkbox(label="Use LoRA Weights", value=False)
-                        lora_weights_path = gr.Textbox(
-                            label="LoRA Weights Path", 
-                            placeholder="Path to LoRA weights"
-                        )
+                        # Style model configuration
+                        with gr.Column():
+                            gr.Markdown("#### Style Model (Style Transfer)")
+                            style_model_path = gr.Textbox(
+                                label="Style Model Path", 
+                                placeholder="Path to local style model"
+                            )
+                            use_lora_checkbox = gr.Checkbox(label="Use LoRA Weights", value=False)
+                            lora_weights_path = gr.Textbox(
+                                label="LoRA Weights Path", 
+                                placeholder="Path to LoRA weights",
+                                visible=False
+                            )
+                        
+                        # Evaluator model configuration
+                        with gr.Column():
+                            gr.Markdown("#### Evaluator Model (Response Evaluation)")
+                            use_separate_evaluator = gr.Checkbox(
+                                label="Use Separate Evaluator Model", 
+                                value=False
+                            )
+                            evaluator_model_id = gr.Textbox(
+                                label="Evaluator Model ID", 
+                                placeholder="Leave empty to use primary model",
+                                visible=False
+                            )
                     
                     setup_pipeline_btn = gr.Button("Setup Pipeline")
                     pipeline_setup_output = gr.Textbox(label="Pipeline Setup Status")
@@ -546,16 +574,43 @@ def build_interface():
             else:
                 return gr.update(visible=False), gr.update(visible=False)
         
+        def update_lora_path_visibility(use_lora):
+            return gr.update(visible=use_lora)
+            
+        def update_evaluator_model_visibility(use_separate):
+            return gr.update(visible=use_separate)
+        
         pipeline_type.change(
             fn=update_pipeline_options,
             inputs=[pipeline_type],
             outputs=[advanced_pipeline_options, personalized_options]
         )
         
+        use_lora_checkbox.change(
+            fn=update_lora_path_visibility,
+            inputs=[use_lora_checkbox],
+            outputs=lora_weights_path
+        )
+        
+        use_separate_evaluator.change(
+            fn=update_evaluator_model_visibility,
+            inputs=[use_separate_evaluator],
+            outputs=evaluator_model_id
+        )
+        
+        def get_evaluator_model_id(use_separate, evaluator_id):
+            return evaluator_id if use_separate else None
+        
         setup_pipeline_btn.click(
-            fn=setup_pipeline,
-            inputs=[pipeline_type, pipeline_model_id, pipeline_api_key, 
-                   local_model_path, use_lora_checkbox, lora_weights_path],
+            fn=lambda p_type, p_id, api_key, style_path, use_sep, eval_id, use_lora, lora_path: 
+                setup_pipeline(
+                    p_type, p_id, api_key, style_path, 
+                    get_evaluator_model_id(use_sep, eval_id),
+                    use_lora, lora_path
+                ),
+            inputs=[pipeline_type, primary_model_id, pipeline_api_key, 
+                   style_model_path, use_separate_evaluator, evaluator_model_id,
+                   use_lora_checkbox, lora_weights_path],
             outputs=pipeline_setup_output
         )
         
